@@ -9,7 +9,7 @@ echo "执行自定义优化脚本 (diy-part2.sh)"
 echo "=========================================="
 
 # ---------------------------------------------------------
-# 1. 升级核心编译依赖 (Golang 26.x 与 SmartDNS)
+# 1. 升级核心编译链 (Golang 26.x 与 SmartDNS)
 # ---------------------------------------------------------
 echo ">>> 升级 Golang 编译链至 26.x，杜绝 daed 编译期 unknown simd 错误..."
 rm -rf feeds/packages/lang/golang
@@ -23,19 +23,20 @@ git clone --depth=1 https://github.com/pymumu/luci-app-smartdns.git feeds/luci/a
 # ---------------------------------------------------------
 # 2. 清理官方冲突组件并统一加载 small 源
 # ---------------------------------------------------------
-echo ">>> 清洗官方旧版冲突组件并优先挂载 small 源..."
+echo ">>> 清洗官方旧版冲突组件并挂载 small 源..."
+# 仅清理官方 packages/luci 中冲突的旧版 dae/daed/mosdns
 rm -rf feeds/packages/net/daed feeds/packages/net/dae feeds/packages/net/mosdns
-rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-daede feeds/luci/applications/luci-app-mosdns
+rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-mosdns
 rm -rf package/feeds/packages/daed package/feeds/packages/dae package/feeds/packages/mosdns
-rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-daede package/feeds/luci/luci-app-mosdns
+rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-mosdns
 rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/luci-app-daed
 
-# 优先拉取 small 源组件并挂载软链接
+# 更新并安装 small 源包
 ./scripts/feeds update small
 ./scripts/feeds install -a -p small
 ./scripts/feeds install -a
 
-# 清理遗留的老版 luci-app-dae (避免 geoip 依赖告警)
+# 清理遗留的老版 luci-app-dae (避免 geoip 警告)
 find feeds/ package/ -type d -name "luci-app-dae" 2>/dev/null | xargs rm -rf 2>/dev/null || true
 
 # ---------------------------------------------------------
@@ -53,7 +54,7 @@ RUBY_MK=$(find feeds package -name "Makefile" -path "*/lang/ruby/Makefile" 2>/de
 if [ -f "$RUBY_MK" ]; then
     sed -i '/config RUBY_ENABLE_YJIT/,/help/{s/default y.*/default n/g}' "$RUBY_MK"
     sed -i 's/RUBY_ENABLE_YJIT:rust\/host//g' "$RUBY_MK" 2>/dev/null || true
-    echo "✅ 已成功斩断 Ruby 对 Rust 的依赖链"
+    echo "✅ 已斩断 Ruby 对 Rust 的依赖链"
 fi
 
 # ---------------------------------------------------------
@@ -144,10 +145,14 @@ done
 # ---------------------------------------------------------
 echo ">>> 正在更新 .config 关键项..."
 cat <<EOF >> .config
-# Daed 与 eBPF 核心 (由 small 源提供)
-CONFIG_PACKAGE_luci-app-daed=y
+# 以仓库实际存在的包名为准：luci-app-daede 与集成核心 daed
+CONFIG_PACKAGE_luci-app-daede=y
 CONFIG_PACKAGE_daed=y
-CONFIG_PACKAGE_dae=y
+
+# 强制打包离线 GeoIP / GeoSite 数据库与证书
+CONFIG_PACKAGE_v2ray-geoip=y
+CONFIG_PACKAGE_v2ray-geosite=y
+CONFIG_PACKAGE_ca-bundle=y
 
 # 常用核心插件 (由 small 源提供)
 CONFIG_PACKAGE_luci-app-adguardhome=y
@@ -155,7 +160,7 @@ CONFIG_PACKAGE_luci-app-mosdns=y
 CONFIG_PACKAGE_luci-app-momo=y
 CONFIG_PACKAGE_luci-app-lucky=y
 
-# 仅开启内核原生生成 BTF 的关键项 (无需外部 kmod-vmlinux-btf 补丁)
+# 仅开启内核原生生成 BTF 的关键项 (无需外部补丁)
 CONFIG_KERNEL_BPF_EVENTS=y
 CONFIG_KERNEL_DEBUG_INFO_BTF=y
 EOF
