@@ -9,94 +9,83 @@ echo "执行自定义优化脚本 (diy-part2.sh)"
 echo "=========================================="
 
 # ---------------------------------------------------------
-# 1. 解决 mihomo 递归依赖死锁 (recursive dependency detected)
+# 1. 升级 Golang 编译链与核心网络组件 (必须在 feeds install 前完成)
 # ---------------------------------------------------------
-# echo ">>> 正在排查并清理 mihomo 循环依赖包..."
-# find package/ feeds/ -type d -name "*mihomo*" 2>/dev/null | grep -E 'alpha|meta' | xargs rm -rf 2>/dev/null || true
+echo ">>> 升级 Golang 编译链至 26.x，杜绝 daed 编译期 unknown simd 错误..."
+rm -rf feeds/packages/lang/golang
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
 
-# 清理遗留的不完整老版 luci-app-dae (避免 dae-geoip/geosite 警告)
+# 清除官方 feeds 中与 package/custom 重复的 mosdns / geodata
+rm -rf feeds/packages/net/v2ray-geodata feeds/packages/net/mosdns
+
+# 升级 SmartDNS 为官方最新源码
+rm -rf feeds/packages/net/smartdns feeds/luci/applications/luci-app-smartdns
+git clone --depth=1 https://github.com/pymumu/openwrt-smartdns.git feeds/packages/net/smartdns
+git clone --depth=1 https://github.com/pymumu/luci-app-smartdns.git feeds/luci/applications/luci-app-smartdns
+
+# ---------------------------------------------------------
+# 2. 清理官方旧版冲突并挂载 small 源中的 daed
+# ---------------------------------------------------------
+echo ">>> 清理官方冲突项并挂载 kenzok8/small 源..."
+rm -rf feeds/packages/net/daed feeds/packages/net/dae
+rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-daede
+rm -rf package/feeds/packages/daed package/feeds/packages/dae
+rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-daede
+rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/luci-app-daed
+
+# 单独对 small 源进行索引更新并完成软链接挂载
+./scripts/feeds update small
+./scripts/feeds install -a -p small
+./scripts/feeds install -a
+
+# 清理遗留的不完整老版 luci-app-dae (避免 geoip 警告)
 find feeds/ package/ -type d -name "luci-app-dae" 2>/dev/null | xargs rm -rf 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 2. 双重拦截：关闭 Ruby YJIT，跳过 rust/host 漫长编译
+# 3. 关闭 Ruby YJIT，跳过 rust/host 漫长编译
 # ---------------------------------------------------------
-echo ">>> 开始执行双重拦截：关闭 Ruby YJIT，跳过 rust/host 编译..."
-
+echo ">>> 执行双重拦截：关闭 Ruby YJIT，跳过 rust/host 编译..."
 for conf in .config *.config; do
     if [ -f "$conf" ]; then
         sed -i '/CONFIG_RUBY_ENABLE_YJIT/d' "$conf"
         echo "# CONFIG_RUBY_ENABLE_YJIT is not set" >> "$conf"
-        echo "✅ 方案 A 成功：已在 $conf 中强制声明关闭 RUBY_ENABLE_YJIT"
     fi
 done
 
 RUBY_MK=$(find feeds package -name "Makefile" -path "*/lang/ruby/Makefile" 2>/dev/null | head -n 1)
 if [ -f "$RUBY_MK" ]; then
-    echo ">>> 正在魔改 Ruby Makefile，执行物理级依赖阉割..."
     sed -i '/config RUBY_ENABLE_YJIT/,/help/{s/default y.*/default n/g}' "$RUBY_MK"
     sed -i 's/RUBY_ENABLE_YJIT:rust\/host//g' "$RUBY_MK" 2>/dev/null || true
-    echo "✅ 方案 B 成功：Ruby 对 Rust 的依赖链已被彻底斩断！"
-else
-    echo "⚠️ 警告: 未找到 Ruby 的 Makefile，方案 B 跳过。"
+    echo "✅ 已成功斩断 Ruby 对 Rust 的依赖链"
 fi
 
 # ---------------------------------------------------------
-# 3. kenzok8/openwrt-daede 专项处理 (使用仓库稳定默认版本)
-# ---------------------------------------------------------
-echo ">>> 正在处理 kenzok8/openwrt-daede 插件..."
-
-rm -rf feeds/packages/net/daed
-rm -rf feeds/luci/applications/luci-app-daed
-rm -rf package/feeds/packages/daed
-rm -rf package/feeds/luci/luci-app-daed
-rm -rf package/daed
-rm -rf package/luci-app-daed
-
-if [ ! -d "package/openwrt-daede" ] && [ ! -d "package/custom/luci-app-daede" ]; then
-    echo ">>> 克隆 kenzok8/openwrt-daede 到 package/openwrt-daede..."
-    git clone --depth 1 https://github.com/kenzok8/openwrt-daede.git package/openwrt-daede
-fi
-
-# 核心防护：全面清洗所有可能触发 Go 崩溃的 unknown GOEXPERIMENT simd 字段
-echo ">>> 正在过滤并清理 daed 中的非法 GOEXPERIMENT simd 依赖参数..."
-find package/openwrt-daede/ -type f \( -name "Makefile*" -o -name "*.mk" -o -name "*.sh" \) 2>/dev/null | while read -r f; do
-    sed -i -E 's/GOEXPERIMENT=[^ ]*simd[^ ]*/GOEXPERIMENT=/g' "$f"
-    sed -i 's/,simd//g; s/simd,//g; s/simd//g' "$f"
-done
-echo "✅ daed 源码树准备完毕"
-
-# ---------------------------------------------------------
-# 4. libxcrypt 专项救治
+# 4. libxcrypt 编译参数加固
 # ---------------------------------------------------------
 XCRYPT_MK=$(find feeds package -name "Makefile" -path "*/libxcrypt/Makefile" 2>/dev/null | head -n 1)
 if [ -n "$XCRYPT_MK" ] && [ -f "$XCRYPT_MK" ]; then
-    echo ">>> 正在硬化 libxcrypt 编译参数..."
     sed -i 's/CONFIGURE_ARGS[ \t]*+=[ \t]*/&--disable-werror /' "$XCRYPT_MK"
     sed -i 's/TARGET_CFLAGS[ \t]*+=[ \t]*/&-fcommon /' "$XCRYPT_MK"
-    echo "✅ libxcrypt 参数注入完成。"
+    echo "✅ libxcrypt 参数注入完成"
 fi
 
 # ---------------------------------------------------------
 # 5. 菜单归类调整
 # ---------------------------------------------------------
-# 5.1 Tailscale -> VPN
 TS_DIR=$(find feeds package -type d -name "luci-app-tailscale-community" 2>/dev/null | head -n 1)
 if [ -n "$TS_DIR" ]; then
-    echo ">>> 发现 Tailscale 插件目录: $TS_DIR"
     find "$TS_DIR" -type f -name "*.json" -exec sed -i 's|admin/services/tailscale|admin/vpn/tailscale|g' {} +
     find "$TS_DIR" -type f -name "*.json" -exec sed -i 's/"parent": "luci.services"/"parent": "luci.vpn"/g' {} +
     echo "✅ Tailscale 菜单已移动到 VPN"
 fi
 
-# 5.2 KSMBD -> NAS
 KSMBD_DIR=$(find feeds package -type d -name "luci-app-ksmbd" 2>/dev/null | head -n 1)
 if [ -n "$KSMBD_DIR" ]; then
     find "$KSMBD_DIR" -type f -exec sed -i 's|admin/services/ksmbd|admin/nas/ksmbd|g' {} +
     find "$KSMBD_DIR" -type f -exec sed -i 's/"parent": "luci.services"/"parent": "luci.nas"/g' {} +
-    echo "✅ KSMBD 菜单已移动"
+    echo "✅ KSMBD 菜单已移动到 NAS"
 fi
 
-# 5.3 OpenList2 -> NAS
 OPENLIST2_DIR=$(find feeds package -type d -name "luci-app-openlist2" 2>/dev/null | head -n 1)
 if [ -n "$OPENLIST2_DIR" ]; then
     find "$OPENLIST2_DIR" -type f -exec sed -i 's|admin/services/openlist2|admin/nas/openlist2|g' {} +
@@ -105,7 +94,7 @@ if [ -n "$OPENLIST2_DIR" ]; then
 fi
 
 # ---------------------------------------------------------
-# 6. 系统参数与网络优化（sysctl）
+# 6. 系统参数与网络优化（sysctl）及默认后台 IP
 # ---------------------------------------------------------
 mkdir -p files/etc/sysctl.d/
 cat > files/etc/sysctl.d/99-proxy-optimize.conf << 'SYSCTL'
@@ -131,21 +120,16 @@ net.ipv4.tcp_wmem=4096 65536 4194304
 net.ipv4.udp_mem=8192 12288 16384
 net.ipv4.ip_local_port_range=1024 65535
 SYSCTL
-echo "✅ 网络优化参数已写入"
 
-# 修改管理后台默认 IP (192.168.2.1)
 sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 7. Filogic (6.6 内核) 强行注入 BTF
+# 7. Filogic 6.6 内核精简注入 eBPF/BTF (彻底防止内核体积过大)
 # ---------------------------------------------------------
 find target/linux/mediatek/ -name "config-6.6" 2>/dev/null | while read -r kernel_config; do
     sed -i '/CONFIG_DEBUG_INFO/d' "$kernel_config"
     sed -i '/CONFIG_BPF/d' "$kernel_config"
     cat <<EOF >> "$kernel_config"
-CONFIG_DEBUG_KERNEL=y
-CONFIG_DEBUG_INFO=y
-CONFIG_DEBUG_INFO_BTF=y
 CONFIG_BPF=y
 CONFIG_BPF_SYSCALL=y
 CONFIG_BPF_JIT=y
@@ -154,33 +138,27 @@ CONFIG_BPF_EVENTS=y
 CONFIG_NET_ACT_BPF=y
 CONFIG_NET_CLS_ACT=y
 CONFIG_CGROUP_BPF=y
+CONFIG_DEBUG_INFO_BTF=y
 EOF
 done
 
 # ---------------------------------------------------------
-# 8. 追加自定义 .config 参数并单次刷新依赖
+# 8. 追加正确包名与顶层内核参数
 # ---------------------------------------------------------
-echo ">>> 正在追加自定义 .config 配置..."
+echo ">>> 正在更新 .config 关键项..."
 cat <<EOF >> .config
-# 开启 kenzok8/openwrt-daede (luci-app-daede) 及相关依赖
-CONFIG_PACKAGE_luci-app-daede=y
+# small 源中的标准包名 luci-app-daed
+CONFIG_PACKAGE_luci-app-daed=y
 CONFIG_PACKAGE_daed=y
-CONFIG_PACKAGE_vmlinux-btf=y
+CONFIG_PACKAGE_dae=y
+CONFIG_PACKAGE_kmod-vmlinux-btf=y
 
-# 开启内核 BTF 顶层编译依赖
-CONFIG_KERNEL_DEBUG_KERNEL=y
-CONFIG_KERNEL_DEBUG_INFO=y
-CONFIG_KERNEL_DEBUG_INFO_REDUCED=n
-CONFIG_KERNEL_DEBUG_INFO_BTF=y
+# 仅开启生成 BTF 的必要项，避免整包膨胀
 CONFIG_KERNEL_BPF_EVENTS=y
-
-# 禁用 Ruby YJIT
-# CONFIG_RUBY_ENABLE_YJIT is not set
+CONFIG_KERNEL_DEBUG_INFO_BTF=y
 EOF
 
-echo "✅ 所有自定义 .config 配置已强行追加完成"
-
-# 刷新并生成最终依赖树
+# 重新生成依赖配置
 make defconfig
 
 echo "=========================================="
