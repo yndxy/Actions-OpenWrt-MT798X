@@ -122,7 +122,7 @@ jobs:
         "$GITHUB_WORKSPACE/$DIY_DEVICE_SH"
 
     # =========================================================
-    # 5.5 执行后置自定义脚本 (已移除对 .config 的二次覆盖)
+    # 5.5 执行后置自定义脚本 (diy-part3.sh)
     # =========================================================
     - name: Run post DIY script (diy-part3.sh)
       run: |
@@ -303,21 +303,20 @@ jobs:
         find dl -size -1024c -exec rm -f {} \;
 
     # =========================================================
-    # 8. 编译固件
+    # 8. 编译固件 (改进的多层降级与错误抓取机制)
     # =========================================================
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
+        echo ">>> 开始多线程快速编译..."
         if make -j"$(nproc)"; then
-          echo "多线程编译成功"
-        elif make -j1; then
-          echo "单线程编译成功"
-        elif make -j1 V=s; then
-          echo "单线程详细日志编译成功"
+          echo "✅ 多线程编译成功"
         else
-          echo "编译失败"
-          exit 1
+          echo "⚠️ 多线程编译失败，正在尝试单独编译 mt_wifi 抓取详细错误..."
+          make package/mtk/drivers/mt_wifi/compile V=s -j1 || true
+          echo ">>> 启动单线程全局详细日志复编..."
+          make -j1 V=s || { echo "❌ 编译最终失败"; exit 1; }
         fi
         echo "status=success" >> "$GITHUB_OUTPUT"
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> "$GITHUB_ENV"
