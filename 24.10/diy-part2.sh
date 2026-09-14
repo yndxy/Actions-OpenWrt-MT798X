@@ -9,14 +9,11 @@ echo "执行自定义优化脚本 (diy-part2.sh)"
 echo "=========================================="
 
 # ---------------------------------------------------------
-# 1. 升级 Golang 编译链与核心网络组件 (必须在 feeds install 前完成)
+# 1. 升级核心编译依赖 (Golang 26.x 与 SmartDNS)
 # ---------------------------------------------------------
 echo ">>> 升级 Golang 编译链至 26.x，杜绝 daed 编译期 unknown simd 错误..."
 rm -rf feeds/packages/lang/golang
 git clone --depth=1 https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
-
-# 清除官方 feeds 中与 package/custom 重复的 mosdns / geodata
-rm -rf feeds/packages/net/v2ray-geodata feeds/packages/net/mosdns
 
 # 升级 SmartDNS 为官方最新源码
 rm -rf feeds/packages/net/smartdns feeds/luci/applications/luci-app-smartdns
@@ -24,25 +21,25 @@ git clone --depth=1 https://github.com/pymumu/openwrt-smartdns.git feeds/package
 git clone --depth=1 https://github.com/pymumu/luci-app-smartdns.git feeds/luci/applications/luci-app-smartdns
 
 # ---------------------------------------------------------
-# 2. 清理官方旧版冲突并挂载 small 源中的 daed
+# 2. 清理官方冲突组件并统一加载 small 源
 # ---------------------------------------------------------
-echo ">>> 清理官方冲突项并挂载 kenzok8/small 源..."
-rm -rf feeds/packages/net/daed feeds/packages/net/dae
-rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-daede
-rm -rf package/feeds/packages/daed package/feeds/packages/dae
-rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-daede
+echo ">>> 清洗官方旧版冲突组件并优先挂载 small 源..."
+rm -rf feeds/packages/net/daed feeds/packages/net/dae feeds/packages/net/mosdns
+rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-daede feeds/luci/applications/luci-app-mosdns
+rm -rf package/feeds/packages/daed package/feeds/packages/dae package/feeds/packages/mosdns
+rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-daede package/feeds/luci/luci-app-mosdns
 rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/luci-app-daed
 
-# 单独对 small 源进行索引更新并完成软链接挂载
+# 优先拉取 small 源组件并挂载软链接
 ./scripts/feeds update small
 ./scripts/feeds install -a -p small
 ./scripts/feeds install -a
 
-# 清理遗留的不完整老版 luci-app-dae (避免 geoip 警告)
+# 清理遗留的老版 luci-app-dae (避免 geoip 依赖告警)
 find feeds/ package/ -type d -name "luci-app-dae" 2>/dev/null | xargs rm -rf 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 3. 关闭 Ruby YJIT，跳过 rust/host 漫长编译
+# 3. 双重拦截：关闭 Ruby YJIT，跳过 rust/host 漫长编译
 # ---------------------------------------------------------
 echo ">>> 执行双重拦截：关闭 Ruby YJIT，跳过 rust/host 编译..."
 for conf in .config *.config; do
@@ -124,7 +121,7 @@ SYSCTL
 sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 7. Filogic 6.6 内核精简注入 eBPF/BTF (彻底防止内核体积过大)
+# 7. Filogic 6.6 内核精简注入 eBPF/BTF (防止固件膨胀)
 # ---------------------------------------------------------
 find target/linux/mediatek/ -name "config-6.6" 2>/dev/null | while read -r kernel_config; do
     sed -i '/CONFIG_DEBUG_INFO/d' "$kernel_config"
@@ -147,18 +144,23 @@ done
 # ---------------------------------------------------------
 echo ">>> 正在更新 .config 关键项..."
 cat <<EOF >> .config
-# small 源中的标准包名 luci-app-daed
+# Daed 与 eBPF 核心 (由 small 源提供)
 CONFIG_PACKAGE_luci-app-daed=y
 CONFIG_PACKAGE_daed=y
 CONFIG_PACKAGE_dae=y
-CONFIG_PACKAGE_kmod-vmlinux-btf=y
 
-# 仅开启生成 BTF 的必要项，避免整包膨胀
+# 常用核心插件 (由 small 源提供)
+CONFIG_PACKAGE_luci-app-adguardhome=y
+CONFIG_PACKAGE_luci-app-mosdns=y
+CONFIG_PACKAGE_luci-app-momo=y
+CONFIG_PACKAGE_luci-app-lucky=y
+
+# 仅开启内核原生生成 BTF 的关键项 (无需外部 kmod-vmlinux-btf 补丁)
 CONFIG_KERNEL_BPF_EVENTS=y
 CONFIG_KERNEL_DEBUG_INFO_BTF=y
 EOF
 
-# 重新生成依赖配置
+# 刷新并生成最终依赖树
 make defconfig
 
 echo "=========================================="
