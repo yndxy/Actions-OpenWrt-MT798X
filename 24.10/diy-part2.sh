@@ -145,7 +145,7 @@ done
 # ---------------------------------------------------------
 echo ">>> 正在更新 .config 关键项..."
 cat <<EOF >> .config
-# 以仓库实际存在的包名为准：luci-app-daede 与集成核心 daed
+# Daed 与 eBPF 核心 (由 small 源提供)
 CONFIG_PACKAGE_luci-app-daede=y
 CONFIG_PACKAGE_daed=y
 
@@ -157,10 +157,19 @@ CONFIG_PACKAGE_ca-bundle=y
 # 常用核心插件 (由 small 源提供)
 CONFIG_PACKAGE_luci-app-adguardhome=y
 CONFIG_PACKAGE_luci-app-mosdns=y
-CONFIG_PACKAGE_luci-app-momo=y
 CONFIG_PACKAGE_luci-app-lucky=y
 
-# 仅开启内核原生生成 BTF 的关键项 (无需外部补丁)
+# Momo 及其 Sing-box 核心
+CONFIG_PACKAGE_luci-app-momo=y
+CONFIG_PACKAGE_momo=y
+CONFIG_PACKAGE_sing-box=y
+
+# Clashoo 前端、守护服务及其 Mihomo 核心
+CONFIG_PACKAGE_luci-app-clashoo=y
+CONFIG_PACKAGE_clashoo=y
+CONFIG_PACKAGE_mihomo=y
+
+# 仅开启内核原生生成 BTF 的关键项
 CONFIG_KERNEL_BPF_EVENTS=y
 CONFIG_KERNEL_DEBUG_INFO_BTF=y
 EOF
