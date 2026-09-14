@@ -24,11 +24,10 @@ git clone --depth=1 https://github.com/pymumu/luci-app-smartdns.git feeds/luci/a
 # 2. 清理官方冲突组件并统一加载 small 源
 # ---------------------------------------------------------
 echo ">>> 清洗官方旧版冲突组件并挂载 small 源..."
-# 仅清理官方 packages/luci 中冲突的旧版 dae/daed/mosdns
 rm -rf feeds/packages/net/daed feeds/packages/net/dae feeds/packages/net/mosdns
-rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-mosdns
+rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-daede feeds/luci/applications/luci-app-mosdns
 rm -rf package/feeds/packages/daed package/feeds/packages/dae package/feeds/packages/mosdns
-rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-mosdns
+rm -rf package/feeds/luci/luci-app-daed package/feeds/luci/luci-app-daede package/feeds/luci/luci-app-mosdns
 rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/luci-app-daed
 
 # 更新并安装 small 源包
@@ -36,8 +35,18 @@ rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/
 ./scripts/feeds install -a -p small
 ./scripts/feeds install -a
 
-# 清理遗留的老版 luci-app-dae (避免 geoip 警告)
+# 清理遗留的老版 luci-app-dae (避免 geoip 依赖告警)
 find feeds/ package/ -type d -name "luci-app-dae" 2>/dev/null | xargs rm -rf 2>/dev/null || true
+
+# ---------------------------------------------------------
+# 2.1 加固 mt_wifi 驱动编译参数 (剔除 -Werror 防止 6.6 内核报错中断)
+# ---------------------------------------------------------
+echo ">>> 正在加固 mt_wifi 驱动编译参数..."
+find package/mtk/drivers/mt_wifi/ -type f \( -name "Makefile*" -o -name "*.mk" \) 2>/dev/null | while read -r f; do
+    sed -i 's/-Werror//g' "$f"
+    sed -i 's/EXTRA_CFLAGS += -Werror/EXTRA_CFLAGS += -Wno-error/g' "$f"
+    sed -i 's/WERROR=1/WERROR=0/g' "$f"
+done
 
 # ---------------------------------------------------------
 # 3. 双重拦截：关闭 Ruby YJIT，跳过 rust/host 漫长编译
@@ -122,7 +131,7 @@ SYSCTL
 sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 7. Filogic 6.6 内核精简注入 eBPF/BTF (防止固件膨胀)
+# 7. Filogic 6.6 内核精简注入 eBPF/BTF
 # ---------------------------------------------------------
 find target/linux/mediatek/ -name "config-6.6" 2>/dev/null | while read -r kernel_config; do
     sed -i '/CONFIG_DEBUG_INFO/d' "$kernel_config"
@@ -145,9 +154,10 @@ done
 # ---------------------------------------------------------
 echo ">>> 正在更新 .config 关键项..."
 cat <<EOF >> .config
-# Daed 与 eBPF 核心 (由 small 源提供)
+# Daed 与 eBPF 核心 (满足 small 依赖)
 CONFIG_PACKAGE_luci-app-daede=y
 CONFIG_PACKAGE_daed=y
+CONFIG_PACKAGE_kmod-vmlinux-btf=y
 
 # 强制打包离线 GeoIP / GeoSite 数据库与证书
 CONFIG_PACKAGE_v2ray-geoip=y
