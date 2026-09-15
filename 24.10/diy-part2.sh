@@ -39,20 +39,47 @@ rm -rf package/openwrt-daede package/custom/luci-app-daede package/daed package/
 find feeds/ package/ -type d -name "luci-app-dae" 2>/dev/null | xargs rm -rf 2>/dev/null || true
 
 # ---------------------------------------------------------
-# 2.1 彻底解决 mt_wifi 驱动在 GCC 13/14 + Linux 6.6 下的 -Waddress 错误
+# 2.1 彻底解决 mt_wifi 驱动在 GCC 14 + Linux 6.6 下的 -Waddress 错误
 # ---------------------------------------------------------
-echo ">>> 正在修补 mt_wifi 驱动中的 eeprom.c 与编译器参数..."
+echo ">>> 正在为 mt_wifi 驱动注入 patch 补丁与编译器规避参数..."
 
-# 1. 修复导致 Error 1 的 BinSource 数组指针判空代码
+# 1. 查找或创建 patches 目录，通过 Patch 机制在源码解压时直接修补 eeprom.c
+MTWIFI_PATCH_DIR=$(find package/ -type d -path "*/mtk/drivers/mt_wifi/patches" 2>/dev/null | head -n 1)
+if [ -z "$MTWIFI_PATCH_DIR" ]; then
+    MTWIFI_BASE=$(find package/ -type d -path "*/mtk/drivers/mt_wifi" 2>/dev/null | head -n 1)
+    if [ -n "$MTWIFI_BASE" ]; then
+        MTWIFI_PATCH_DIR="$MTWIFI_BASE/patches"
+        mkdir -p "$MTWIFI_PATCH_DIR"
+    fi
+fi
+
+if [ -n "$MTWIFI_PATCH_DIR" ]; then
+    cat << 'EOF' > "$MTWIFI_PATCH_DIR/999-fix-gcc14-waddress-eeprom.patch"
+--- a/mt_wifi/embedded/common/eeprom.c
++++ b/mt_wifi/embedded/common/eeprom.c
+@@ -2151,7 +2151,7 @@ INT show_e2pinfo_proc(RTMP_ADAPTER *pAd,
+ 	MTWF_DBG(pAd, DBG_CAT_CFG, DBG_SUBCAT_ALL, DBG_LVL_INFO,
+ 			"bin is from %s\n", pE2pCtrl->BinSource);
+ 
+-	if ((pE2pCtrl->e2pSource & E2P_SRC_FROM_BIN) && pE2pCtrl->BinSource)
++	if ((pE2pCtrl->e2pSource & E2P_SRC_FROM_BIN) && pE2pCtrl->BinSource[0])
+ 		MTWF_DBG(pAd, DBG_CAT_CFG, DBG_SUBCAT_ALL, DBG_LVL_INFO,
+ 				"efuse or bin is %s\n", pE2pCtrl->BinSource);
+ 	else
+EOF
+    echo "✅ 已成功生成 999-fix-gcc14-waddress-eeprom.patch"
+fi
+
+# 2. 如果存在本地源码树，则直接同步修补（双保险）
 find package/mtk/drivers/mt_wifi/ -name "eeprom.c" 2>/dev/null | while read -r f; do
     sed -i 's/&& pE2pCtrl->BinSource/&& pE2pCtrl->BinSource[0]/g' "$f"
-    echo "✅ 已修补 $f 中的 BinSource 检查"
 done
 
-# 2. 向 mt_wifi 的 Makefile 注入参数，全局抑制 -Werror 与 -Waddress
+# 3. 清除 mt_wifi 所有构建脚本中的 -Werror 限制并抑制 -Waddress
 find package/mtk/drivers/mt_wifi/ -type f \( -name "Makefile*" -o -name "*.mk" \) 2>/dev/null | while read -r f; do
     sed -i 's/-Werror//g' "$f"
     sed -i 's/WERROR=1/WERROR=0/g' "$f"
+    sed -i 's/EXTRA_CFLAGS += -Werror/EXTRA_CFLAGS += -Wno-error/g' "$f"
     sed -i '1i EXTRA_CFLAGS += -Wno-error -Wno-address -Wno-unused-result -Wno-format-truncation' "$f"
 done
 
